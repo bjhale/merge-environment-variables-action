@@ -26089,8 +26089,8 @@ var __webpack_exports__ = {};
 
 
 const defaultVariables = ini__WEBPACK_IMPORTED_MODULE_1__.parse(_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput('default_variables'));
-const overrideVariables = ini__WEBPACK_IMPORTED_MODULE_1__.parse(_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput('override_variables'));
 const dynamicVariables = ini__WEBPACK_IMPORTED_MODULE_1__.parse(_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput('dynamic_variables'));
+const overrideVariables = ini__WEBPACK_IMPORTED_MODULE_1__.parse(_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput('override_variables').replace(",", "\n"));
 
 let vars = {...defaultVariables, ...overrideVariables, ...dynamicVariables};
 

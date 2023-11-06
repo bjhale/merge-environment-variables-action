@@ -2,8 +2,8 @@ import core from '@actions/core';
 import ini from 'ini';
 
 const defaultVariables = ini.parse(core.getInput('default_variables'));
-const overrideVariables = ini.parse(core.getInput('override_variables'));
 const dynamicVariables = ini.parse(core.getInput('dynamic_variables'));
+const overrideVariables = ini.parse(core.getInput('override_variables').replace(",", "\n"));
 
 let vars = {...defaultVariables, ...overrideVariables, ...dynamicVariables};
 

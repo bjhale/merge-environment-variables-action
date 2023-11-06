@@ -5,7 +5,7 @@ inputs:
     description: "Default environment variables in INI format."
     required: true
   override_variables:
-    description: "Override environment variables in INI format."
+    description: "Override environment variables in comma delimited Key=Value format."
     required: true
   dynamic_variables:
     description: "Dynamic environment variables in INI format."
