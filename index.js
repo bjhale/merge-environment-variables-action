@@ -8,5 +8,3 @@ const overrideVariables = core.getInput('override_variables').replace(",", "\n")
 const merged = mergeVariables(defaultVariables, overrideVariables, dynamicVariables)
 
 core.setOutput('merged_variables', merged);
-
-core.exportVariable()
