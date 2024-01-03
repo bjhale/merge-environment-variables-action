@@ -1,5 +1,5 @@
 import core from '@actions/core';
-import mergeVariables from './src/mergeVariables';
+import mergeVariables from './src/mergeVariables.js';
 
 const defaultVariables = core.getInput('default_variables');
 const dynamicVariables = core.getInput('dynamic_variables') ?? '';

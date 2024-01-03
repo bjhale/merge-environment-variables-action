@@ -3234,6 +3234,612 @@ module.exports = parseParams
 
 /***/ }),
 
+/***/ 2437:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(7147)
+const path = __nccwpck_require__(1017)
+const os = __nccwpck_require__(2037)
+const crypto = __nccwpck_require__(6113)
+const packageJson = __nccwpck_require__(9968)
+
+const version = packageJson.version
+
+const LINE = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/mg
+
+// Parse src into an Object
+function parse (src) {
+  const obj = {}
+
+  // Convert buffer to string
+  let lines = src.toString()
+
+  // Convert line breaks to same format
+  lines = lines.replace(/\r\n?/mg, '\n')
+
+  let match
+  while ((match = LINE.exec(lines)) != null) {
+    const key = match[1]
+
+    // Default undefined or null to empty string
+    let value = (match[2] || '')
+
+    // Remove whitespace
+    value = value.trim()
+
+    // Check if double quoted
+    const maybeQuote = value[0]
+
+    // Remove surrounding quotes
+    value = value.replace(/^(['"`])([\s\S]*)\1$/mg, '$2')
+
+    // Expand newlines if double quoted
+    if (maybeQuote === '"') {
+      value = value.replace(/\\n/g, '\n')
+      value = value.replace(/\\r/g, '\r')
+    }
+
+    // Add to object
+    obj[key] = value
+  }
+
+  return obj
+}
+
+function _parseVault (options) {
+  const vaultPath = _vaultPath(options)
+
+  // Parse .env.vault
+  const result = DotenvModule.configDotenv({ path: vaultPath })
+  if (!result.parsed) {
+    throw new Error(`MISSING_DATA: Cannot parse ${vaultPath} for an unknown reason`)
+  }
+
+  // handle scenario for comma separated keys - for use with key rotation
+  // example: DOTENV_KEY="dotenv://:key_1234@dotenv.org/vault/.env.vault?environment=prod,dotenv://:key_7890@dotenv.org/vault/.env.vault?environment=prod"
+  const keys = _dotenvKey(options).split(',')
+  const length = keys.length
+
+  let decrypted
+  for (let i = 0; i < length; i++) {
+    try {
+      // Get full key
+      const key = keys[i].trim()
+
+      // Get instructions for decrypt
+      const attrs = _instructions(result, key)
+
+      // Decrypt
+      decrypted = DotenvModule.decrypt(attrs.ciphertext, attrs.key)
+
+      break
+    } catch (error) {
+      // last key
+      if (i + 1 >= length) {
+        throw error
+      }
+      // try next key
+    }
+  }
+
+  // Parse decrypted .env string
+  return DotenvModule.parse(decrypted)
+}
+
+function _log (message) {
+  console.log(`[dotenv@${version}][INFO] ${message}`)
+}
+
+function _warn (message) {
+  console.log(`[dotenv@${version}][WARN] ${message}`)
+}
+
+function _debug (message) {
+  console.log(`[dotenv@${version}][DEBUG] ${message}`)
+}
+
+function _dotenvKey (options) {
+  // prioritize developer directly setting options.DOTENV_KEY
+  if (options && options.DOTENV_KEY && options.DOTENV_KEY.length > 0) {
+    return options.DOTENV_KEY
+  }
+
+  // secondary infra already contains a DOTENV_KEY environment variable
+  if (process.env.DOTENV_KEY && process.env.DOTENV_KEY.length > 0) {
+    return process.env.DOTENV_KEY
+  }
+
+  // fallback to empty string
+  return ''
+}
+
+function _instructions (result, dotenvKey) {
+  // Parse DOTENV_KEY. Format is a URI
+  let uri
+  try {
+    uri = new URL(dotenvKey)
+  } catch (error) {
+    if (error.code === 'ERR_INVALID_URL') {
+      throw new Error('INVALID_DOTENV_KEY: Wrong format. Must be in valid uri format like dotenv://:key_1234@dotenv.org/vault/.env.vault?environment=development')
+    }
+
+    throw error
+  }
+
+  // Get decrypt key
+  const key = uri.password
+  if (!key) {
+    throw new Error('INVALID_DOTENV_KEY: Missing key part')
+  }
+
+  // Get environment
+  const environment = uri.searchParams.get('environment')
+  if (!environment) {
+    throw new Error('INVALID_DOTENV_KEY: Missing environment part')
+  }
+
+  // Get ciphertext payload
+  const environmentKey = `DOTENV_VAULT_${environment.toUpperCase()}`
+  const ciphertext = result.parsed[environmentKey] // DOTENV_VAULT_PRODUCTION
+  if (!ciphertext) {
+    throw new Error(`NOT_FOUND_DOTENV_ENVIRONMENT: Cannot locate environment ${environmentKey} in your .env.vault file.`)
+  }
+
+  return { ciphertext, key }
+}
+
+function _vaultPath (options) {
+  let dotenvPath = path.resolve(process.cwd(), '.env')
+
+  if (options && options.path && options.path.length > 0) {
+    dotenvPath = options.path
+  }
+
+  // Locate .env.vault
+  return dotenvPath.endsWith('.vault') ? dotenvPath : `${dotenvPath}.vault`
+}
+
+function _resolveHome (envPath) {
+  return envPath[0] === '~' ? path.join(os.homedir(), envPath.slice(1)) : envPath
+}
+
+function _configVault (options) {
+  _log('Loading env from encrypted .env.vault')
+
+  const parsed = DotenvModule._parseVault(options)
+
+  let processEnv = process.env
+  if (options && options.processEnv != null) {
+    processEnv = options.processEnv
+  }
+
+  DotenvModule.populate(processEnv, parsed, options)
+
+  return { parsed }
+}
+
+function configDotenv (options) {
+  let dotenvPath = path.resolve(process.cwd(), '.env')
+  let encoding = 'utf8'
+  const debug = Boolean(options && options.debug)
+
+  if (options) {
+    if (options.path != null) {
+      dotenvPath = _resolveHome(options.path)
+    }
+    if (options.encoding != null) {
+      encoding = options.encoding
+    }
+  }
+
+  try {
+    // Specifying an encoding returns a string instead of a buffer
+    const parsed = DotenvModule.parse(fs.readFileSync(dotenvPath, { encoding }))
+
+    let processEnv = process.env
+    if (options && options.processEnv != null) {
+      processEnv = options.processEnv
+    }
+
+    DotenvModule.populate(processEnv, parsed, options)
+
+    return { parsed }
+  } catch (e) {
+    if (debug) {
+      _debug(`Failed to load ${dotenvPath} ${e.message}`)
+    }
+
+    return { error: e }
+  }
+}
+
+// Populates process.env from .env file
+function config (options) {
+  const vaultPath = _vaultPath(options)
+
+  // fallback to original dotenv if DOTENV_KEY is not set
+  if (_dotenvKey(options).length === 0) {
+    return DotenvModule.configDotenv(options)
+  }
+
+  // dotenvKey exists but .env.vault file does not exist
+  if (!fs.existsSync(vaultPath)) {
+    _warn(`You set DOTENV_KEY but you are missing a .env.vault file at ${vaultPath}. Did you forget to build it?`)
+
+    return DotenvModule.configDotenv(options)
+  }
+
+  return DotenvModule._configVault(options)
+}
+
+function decrypt (encrypted, keyStr) {
+  const key = Buffer.from(keyStr.slice(-64), 'hex')
+  let ciphertext = Buffer.from(encrypted, 'base64')
+
+  const nonce = ciphertext.slice(0, 12)
+  const authTag = ciphertext.slice(-16)
+  ciphertext = ciphertext.slice(12, -16)
+
+  try {
+    const aesgcm = crypto.createDecipheriv('aes-256-gcm', key, nonce)
+    aesgcm.setAuthTag(authTag)
+    return `${aesgcm.update(ciphertext)}${aesgcm.final()}`
+  } catch (error) {
+    const isRange = error instanceof RangeError
+    const invalidKeyLength = error.message === 'Invalid key length'
+    const decryptionFailed = error.message === 'Unsupported state or unable to authenticate data'
+
+    if (isRange || invalidKeyLength) {
+      const msg = 'INVALID_DOTENV_KEY: It must be 64 characters long (or more)'
+      throw new Error(msg)
+    } else if (decryptionFailed) {
+      const msg = 'DECRYPTION_FAILED: Please check your DOTENV_KEY'
+      throw new Error(msg)
+    } else {
+      console.error('Error: ', error.code)
+      console.error('Error: ', error.message)
+      throw error
+    }
+  }
+}
+
+// Populate process.env with parsed values
+function populate (processEnv, parsed, options = {}) {
+  const debug = Boolean(options && options.debug)
+  const override = Boolean(options && options.override)
+
+  if (typeof parsed !== 'object') {
+    throw new Error('OBJECT_REQUIRED: Please check the processEnv argument being passed to populate')
+  }
+
+  // Set process.env
+  for (const key of Object.keys(parsed)) {
+    if (Object.prototype.hasOwnProperty.call(processEnv, key)) {
+      if (override === true) {
+        processEnv[key] = parsed[key]
+      }
+
+      if (debug) {
+        if (override === true) {
+          _debug(`"${key}" is already defined and WAS overwritten`)
+        } else {
+          _debug(`"${key}" is already defined and was NOT overwritten`)
+        }
+      }
+    } else {
+      processEnv[key] = parsed[key]
+    }
+  }
+}
+
+const DotenvModule = {
+  configDotenv,
+  _configVault,
+  _parseVault,
+  config,
+  decrypt,
+  parse,
+  populate
+}
+
+module.exports.configDotenv = DotenvModule.configDotenv
+module.exports._configVault = DotenvModule._configVault
+module.exports._parseVault = DotenvModule._parseVault
+module.exports.config = DotenvModule.config
+module.exports.decrypt = DotenvModule.decrypt
+module.exports.parse = DotenvModule.parse
+module.exports.populate = DotenvModule.populate
+
+module.exports = DotenvModule
+
+
+/***/ }),
+
+/***/ 45:
+/***/ ((module) => {
+
+const { hasOwnProperty } = Object.prototype
+
+const encode = (obj, opt = {}) => {
+  if (typeof opt === 'string') {
+    opt = { section: opt }
+  }
+  opt.align = opt.align === true
+  opt.newline = opt.newline === true
+  opt.sort = opt.sort === true
+  opt.whitespace = opt.whitespace === true || opt.align === true
+  // The `typeof` check is required because accessing the `process` directly fails on browsers.
+  /* istanbul ignore next */
+  opt.platform = opt.platform || (typeof process !== 'undefined' && process.platform)
+  opt.bracketedArray = opt.bracketedArray !== false
+
+  /* istanbul ignore next */
+  const eol = opt.platform === 'win32' ? '\r\n' : '\n'
+  const separator = opt.whitespace ? ' = ' : '='
+  const children = []
+
+  const keys = opt.sort ? Object.keys(obj).sort() : Object.keys(obj)
+
+  let padToChars = 0
+  // If aligning on the separator, then padToChars is determined as follows:
+  // 1. Get the keys
+  // 2. Exclude keys pointing to objects unless the value is null or an array
+  // 3. Add `[]` to array keys
+  // 4. Ensure non empty set of keys
+  // 5. Reduce the set to the longest `safe` key
+  // 6. Get the `safe` length
+  if (opt.align) {
+    padToChars = safe(
+      (
+        keys
+          .filter(k => obj[k] === null || Array.isArray(obj[k]) || typeof obj[k] !== 'object')
+          .map(k => Array.isArray(obj[k]) ? `${k}[]` : k)
+      )
+        .concat([''])
+        .reduce((a, b) => safe(a).length >= safe(b).length ? a : b)
+    ).length
+  }
+
+  let out = ''
+  const arraySuffix = opt.bracketedArray ? '[]' : ''
+
+  for (const k of keys) {
+    const val = obj[k]
+    if (val && Array.isArray(val)) {
+      for (const item of val) {
+        out += safe(`${k}${arraySuffix}`).padEnd(padToChars, ' ') + separator + safe(item) + eol
+      }
+    } else if (val && typeof val === 'object') {
+      children.push(k)
+    } else {
+      out += safe(k).padEnd(padToChars, ' ') + separator + safe(val) + eol
+    }
+  }
+
+  if (opt.section && out.length) {
+    out = '[' + safe(opt.section) + ']' + (opt.newline ? eol + eol : eol) + out
+  }
+
+  for (const k of children) {
+    const nk = splitSections(k, '.').join('\\.')
+    const section = (opt.section ? opt.section + '.' : '') + nk
+    const child = encode(obj[k], {
+      ...opt,
+      section,
+    })
+    if (out.length && child.length) {
+      out += eol
+    }
+
+    out += child
+  }
+
+  return out
+}
+
+function splitSections (str, separator) {
+  var lastMatchIndex = 0
+  var lastSeparatorIndex = 0
+  var nextIndex = 0
+  var sections = []
+
+  do {
+    nextIndex = str.indexOf(separator, lastMatchIndex)
+
+    if (nextIndex !== -1) {
+      lastMatchIndex = nextIndex + separator.length
+
+      if (nextIndex > 0 && str[nextIndex - 1] === '\\') {
+        continue
+      }
+
+      sections.push(str.slice(lastSeparatorIndex, nextIndex))
+      lastSeparatorIndex = nextIndex + separator.length
+    }
+  } while (nextIndex !== -1)
+
+  sections.push(str.slice(lastSeparatorIndex))
+
+  return sections
+}
+
+const decode = (str, opt = {}) => {
+  opt.bracketedArray = opt.bracketedArray !== false
+  const out = Object.create(null)
+  let p = out
+  let section = null
+  //          section          |key      = value
+  const re = /^\[([^\]]*)\]\s*$|^([^=]+)(=(.*))?$/i
+  const lines = str.split(/[\r\n]+/g)
+  const duplicates = {}
+
+  for (const line of lines) {
+    if (!line || line.match(/^\s*[;#]/) || line.match(/^\s*$/)) {
+      continue
+    }
+    const match = line.match(re)
+    if (!match) {
+      continue
+    }
+    if (match[1] !== undefined) {
+      section = unsafe(match[1])
+      if (section === '__proto__') {
+        // not allowed
+        // keep parsing the section, but don't attach it.
+        p = Object.create(null)
+        continue
+      }
+      p = out[section] = out[section] || Object.create(null)
+      continue
+    }
+    const keyRaw = unsafe(match[2])
+    let isArray
+    if (opt.bracketedArray) {
+      isArray = keyRaw.length > 2 && keyRaw.slice(-2) === '[]'
+    } else {
+      duplicates[keyRaw] = (duplicates?.[keyRaw] || 0) + 1
+      isArray = duplicates[keyRaw] > 1
+    }
+    const key = isArray ? keyRaw.slice(0, -2) : keyRaw
+    if (key === '__proto__') {
+      continue
+    }
+    const valueRaw = match[3] ? unsafe(match[4]) : true
+    const value = valueRaw === 'true' ||
+      valueRaw === 'false' ||
+      valueRaw === 'null' ? JSON.parse(valueRaw)
+      : valueRaw
+
+    // Convert keys with '[]' suffix to an array
+    if (isArray) {
+      if (!hasOwnProperty.call(p, key)) {
+        p[key] = []
+      } else if (!Array.isArray(p[key])) {
+        p[key] = [p[key]]
+      }
+    }
+
+    // safeguard against resetting a previously defined
+    // array by accidentally forgetting the brackets
+    if (Array.isArray(p[key])) {
+      p[key].push(value)
+    } else {
+      p[key] = value
+    }
+  }
+
+  // {a:{y:1},"a.b":{x:2}} --> {a:{y:1,b:{x:2}}}
+  // use a filter to return the keys that have to be deleted.
+  const remove = []
+  for (const k of Object.keys(out)) {
+    if (!hasOwnProperty.call(out, k) ||
+      typeof out[k] !== 'object' ||
+      Array.isArray(out[k])) {
+      continue
+    }
+
+    // see if the parent section is also an object.
+    // if so, add it to that, and mark this one for deletion
+    const parts = splitSections(k, '.')
+    p = out
+    const l = parts.pop()
+    const nl = l.replace(/\\\./g, '.')
+    for (const part of parts) {
+      if (part === '__proto__') {
+        continue
+      }
+      if (!hasOwnProperty.call(p, part) || typeof p[part] !== 'object') {
+        p[part] = Object.create(null)
+      }
+      p = p[part]
+    }
+    if (p === out && nl === l) {
+      continue
+    }
+
+    p[nl] = out[k]
+    remove.push(k)
+  }
+  for (const del of remove) {
+    delete out[del]
+  }
+
+  return out
+}
+
+const isQuoted = val => {
+  return (val.startsWith('"') && val.endsWith('"')) ||
+    (val.startsWith("'") && val.endsWith("'"))
+}
+
+const safe = val => {
+  if (
+    typeof val !== 'string' ||
+    val.match(/[=\r\n]/) ||
+    val.match(/^\[/) ||
+    (val.length > 1 && isQuoted(val)) ||
+    val !== val.trim()
+  ) {
+    return JSON.stringify(val)
+  }
+  return val.split(';').join('\\;').split('#').join('\\#')
+}
+
+const unsafe = (val, doUnesc) => {
+  val = (val || '').trim()
+  if (isQuoted(val)) {
+    // remove the single quotes before calling JSON.parse
+    if (val.charAt(0) === "'") {
+      val = val.slice(1, -1)
+    }
+    try {
+      val = JSON.parse(val)
+    } catch {
+      // ignore errors
+    }
+  } else {
+    // walk the val to find the first not-escaped ; character
+    let esc = false
+    let unesc = ''
+    for (let i = 0, l = val.length; i < l; i++) {
+      const c = val.charAt(i)
+      if (esc) {
+        if ('\\;#'.indexOf(c) !== -1) {
+          unesc += c
+        } else {
+          unesc += '\\' + c
+        }
+
+        esc = false
+      } else if (';#'.indexOf(c) !== -1) {
+        break
+      } else if (c === '\\') {
+        esc = true
+      } else {
+        unesc += c
+      }
+    }
+    if (esc) {
+      unesc += '\\'
+    }
+
+    return unesc.trim()
+  }
+  return val
+}
+
+module.exports = {
+  parse: decode,
+  decode,
+  stringify: encode,
+  encode,
+  safe,
+  unsafe,
+}
+
+
+/***/ }),
+
 /***/ 4294:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -25561,14 +26167,6 @@ exports["default"] = _default;
 
 /***/ }),
 
-/***/ 9027:
-/***/ ((module) => {
-
-module.exports = eval("require")("./src/mergeVariables");
-
-
-/***/ }),
-
 /***/ 9491:
 /***/ ((module) => {
 
@@ -25763,6 +26361,13 @@ module.exports = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("worker_threa
 
 module.exports = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("zlib");
 
+/***/ }),
+
+/***/ 9968:
+/***/ ((module) => {
+
+module.exports = JSON.parse('{"name":"dotenv","version":"16.3.1","description":"Loads environment variables from .env file","main":"lib/main.js","types":"lib/main.d.ts","exports":{".":{"types":"./lib/main.d.ts","require":"./lib/main.js","default":"./lib/main.js"},"./config":"./config.js","./config.js":"./config.js","./lib/env-options":"./lib/env-options.js","./lib/env-options.js":"./lib/env-options.js","./lib/cli-options":"./lib/cli-options.js","./lib/cli-options.js":"./lib/cli-options.js","./package.json":"./package.json"},"scripts":{"dts-check":"tsc --project tests/types/tsconfig.json","lint":"standard","lint-readme":"standard-markdown","pretest":"npm run lint && npm run dts-check","test":"tap tests/*.js --100 -Rspec","prerelease":"npm test","release":"standard-version"},"repository":{"type":"git","url":"git://github.com/motdotla/dotenv.git"},"funding":"https://github.com/motdotla/dotenv?sponsor=1","keywords":["dotenv","env",".env","environment","variables","config","settings"],"readmeFilename":"README.md","license":"BSD-2-Clause","devDependencies":{"@definitelytyped/dtslint":"^0.0.133","@types/node":"^18.11.3","decache":"^4.6.1","sinon":"^14.0.1","standard":"^17.0.0","standard-markdown":"^7.1.0","standard-version":"^9.5.0","tap":"^16.3.0","tar":"^6.1.11","typescript":"^4.8.4"},"engines":{"node":">=12"},"browser":{"fs":false}}');
+
 /***/ })
 
 /******/ });
@@ -25806,19 +26411,110 @@ module.exports = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("zlib");
 var __webpack_exports__ = {};
 // This entry need to be wrapped in an IIFE because it need to be isolated against other modules in the chunk.
 (() => {
-/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(2186);
-/* harmony import */ var _src_mergeVariables__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(9027);
+
+// EXTERNAL MODULE: ./node_modules/@actions/core/lib/core.js
+var core = __nccwpck_require__(2186);
+// EXTERNAL MODULE: ./node_modules/dotenv/lib/main.js
+var main = __nccwpck_require__(2437);
+// EXTERNAL MODULE: ./node_modules/ini/lib/ini.js
+var ini = __nccwpck_require__(45);
+;// CONCATENATED MODULE: ./src/variableExpand.js
+function _searchLast(str, rgx) {
+  const matches = Array.from(str.matchAll(rgx))
+  return matches.length > 0 ? matches.slice(-1)[0].index : -1
+}
+
+function _resolveEscapeSequences(value) {
+  return value.replace(/\\\$/g, '$')
+}
+
+function _interpolate (envValue, environment) {
+  // find the last unescaped dollar sign in the
+  // value so that we can evaluate it
+  const lastUnescapedDollarSignIndex = _searchLast(envValue, /(?!(?<=\\))\$/g)
+
+  // If we couldn't match any unescaped dollar sign
+  // let's return the string as is
+  if (lastUnescapedDollarSignIndex === -1) return envValue
+
+  // This is the right-most group of variables in the string
+  const rightMostGroup = envValue.slice(lastUnescapedDollarSignIndex)
+
+  /**
+   * This finds the inner most variable/group divided
+   * by variable name and default value (if present)
+   * (
+   *   (?!(?<=\\))\$        // only match dollar signs that are not escaped
+   *   {?                   // optional opening curly brace
+   *     ([\w]+)            // match the variable name
+   *     (?::-([^}\\]*))?   // match an optional default value
+   *   }?                   // optional closing curly brace
+   * )
+   */
+  const matchGroup = /((?!(?<=\\))\${?([\w]+)(?::-([^}\\]*))?}?)/
+  const match = rightMostGroup.match(matchGroup)
+
+  if (match != null) {
+    const [, group, variableName, defaultValue] = match
+
+    return _interpolate(
+      envValue.replace(
+        group,
+        environment[variableName] ||
+          defaultValue ||
+          ''
+      ),
+      environment
+    )
+  }
+
+  return envValue
+}
+
+function variableExpand(vars, environment) {
+  let parsed = vars;
+
+  for (const key in vars) {
+    const value = vars[key];
+
+    parsed[key] = _resolveEscapeSequences(_interpolate(value, environment));
+
+  }
+
+  return parsed;
+}
+;// CONCATENATED MODULE: ./src/mergeVariables.js
 
 
 
-const defaultVariables = _actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput('default_variables');
-const dynamicVariables = _actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput('dynamic_variables') ?? '';
-const overrideVariables = _actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput('override_variables').replace(",", "\n") ?? ''; //Convert comma delimited to new line
 
-const merged = _src_mergeVariables__WEBPACK_IMPORTED_MODULE_1__(defaultVariables, overrideVariables, dynamicVariables)
+function mergeVariables(defaultVariables, overrideVariables = '', dynamicVariables = '') {
+  //Parse out default and override variables;
+  const defaultVars = main.parse(defaultVariables);
+  const overrideVars = main.parse(overrideVariables);
 
-_actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput('merged_variables', merged);
+  //Parse out dynamic variables and expand them using either the environment or previous default/override vars.
+  const dynamicVars = variableExpand(main.parse(dynamicVariables), { 
+    ...process.env, 
+    ...defaultVars, 
+    ...overrideVars
+  });
 
-_actions_core__WEBPACK_IMPORTED_MODULE_0__.exportVariable()
+  return ini.stringify({ ...defaultVars, ...overrideVars, ...dynamicVars });
+
+}
+;// CONCATENATED MODULE: ./index.js
+
+
+
+const defaultVariables = core.getInput('default_variables');
+const dynamicVariables = core.getInput('dynamic_variables') ?? '';
+const overrideVariables = core.getInput('override_variables').replace(",", "\n") ?? ''; //Convert comma delimited to new line
+
+const merged = mergeVariables(defaultVariables, overrideVariables, dynamicVariables)
+
+core.setOutput('merged_variables', merged);
+
+core.exportVariable()
 })();
 

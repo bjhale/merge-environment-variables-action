@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import ini from 'ini';
-import variableExpand from './variableExpand';
+import variableExpand from './variableExpand.js';
 
 export default function mergeVariables(defaultVariables, overrideVariables = '', dynamicVariables = '') {
   //Parse out default and override variables;
