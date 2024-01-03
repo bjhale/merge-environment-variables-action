@@ -2,18 +2,18 @@ name: "Merge Environment Variables Action"
 description: "Merges environment variables from multiple sources into a single source."
 inputs:
   default_variables:
-    description: "Default environment variables in INI format."
+    description: "Default environment variables in INI/dotenv format."
     required: true
   override_variables:
     description: "Override environment variables in comma delimited Key=Value format."
-    required: true
+    required: false
   dynamic_variables:
-    description: "Dynamic environment variables in INI format."
-    required: true
+    description: "Environment variables in INI/dotenv format. May include variable substitution. Will substitute from override_variables or default_variables or environment in this order."
+    required: false
 
 outputs:
   merged_variables:
-    description: "Merged environment variables in INI format."
+    description: "Merged environment variables in INI/dotenv format."
 
 runs:
   using: "node20"

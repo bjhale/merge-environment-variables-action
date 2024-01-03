@@ -1,14 +1,12 @@
 import core from '@actions/core';
-import ini from 'ini';
+import mergeVariables from './src/mergeVariables';
 
-const defaultVariables = ini.parse(core.getInput('default_variables'));
-const dynamicVariables = ini.parse(core.getInput('dynamic_variables'));
-const overrideVariables = ini.parse(core.getInput('override_variables').replace(",", "\n"));
+const defaultVariables = core.getInput('default_variables');
+const dynamicVariables = core.getInput('dynamic_variables') ?? '';
+const overrideVariables = core.getInput('override_variables').replace(",", "\n") ?? ''; //Convert comma delimited to new line
 
-let vars = {...defaultVariables, ...overrideVariables, ...dynamicVariables};
-
-const merged = ini.stringify(vars);
-
-console.log(merged);
+const merged = mergeVariables(defaultVariables, overrideVariables, dynamicVariables)
 
 core.setOutput('merged_variables', merged);
+
+core.exportVariable()
