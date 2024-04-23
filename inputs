@@ -1,0 +1,3 @@
+export INPUT_DEFAULT_VARIABLES="C=c"
+export INPUT_OVERRIDE_VARIABLES="API_URL='https://mkt-api.gcu.edu',FACULTY_STREAM_URL='https://mkt-api.gcu.edu/faculty-list/v2/component',DEGREE_PROGRAMS_BASE_URL='https://mkt-api.gcu.edu/degree-programs/v2',XRM_PVG_PROXY_URL='https://mkt-api.gcu.edu/degree-programs/v2/xrm-pvg-data'"
+export INPUT_DYNAMIC_VARIABLES="D=d"

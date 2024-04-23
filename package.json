@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "prebuild": "npm run lint",
     "lint": "eslint **.js",
     "build": "ncc build index.js -o dist"
   },
@@ -17,7 +18,8 @@
     "@vercel/ncc": "^0.38.1",
     "dotenv": "^16.3.1",
     "dotenv-expand": "^10.0.0",
-    "ini": "^4.1.1"
+    "ini": "^4.1.1",
+    "markdown-table": "^3.0.3"
   },
   "devDependencies": {
     "eslint": "^8.53.0",
